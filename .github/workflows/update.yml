@@ -116,11 +116,17 @@ jobs:
           if git ls-remote --heads aur master | grep -q master; then
             git fetch aur master
             PARENT=$(git rev-parse FETCH_HEAD)
-            COMMIT=$(printf 'update to %s' "${{ steps.manifest.outputs.pkgver }}" | git commit-tree "$TREE" -p "$PARENT")
+            PARENT_TREE=$(git rev-parse FETCH_HEAD^{tree})
+            if [ "$TREE" = "$PARENT_TREE" ]; then
+              echo "树对象与 AUR HEAD 一致，跳过提交。"
+            else
+              COMMIT=$(printf 'update to %s' "${{ steps.manifest.outputs.pkgver }}" | git commit-tree "$TREE" -p "$PARENT")
+              git push aur "$COMMIT:refs/heads/master"
+            fi
           else
             COMMIT=$(printf 'update to %s' "${{ steps.manifest.outputs.pkgver }}" | git commit-tree "$TREE")
+            git push aur "$COMMIT:refs/heads/master"
           fi
-          git push aur "$COMMIT:refs/heads/master"
 
   aggregate:
     needs: update
@@ -207,5 +213,9 @@ jobs:
 
           rm -rf artifacts
           git add -- "${changed_files[@]}"
+          if git diff --cached --quiet; then
+            echo "暂存区与 HEAD 无差异，跳过提交。"
+            exit 0
+          fi
           git commit -m "$(printf '%s\n\n%s' 'chore: update packages' "${commit_lines}")"
           git push origin main
