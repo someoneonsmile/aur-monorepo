@@ -1,0 +1,211 @@
+name: update
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # 每6小时检查一次
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.scan.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Scan package directories
+        id: scan
+        run: |
+          packages=$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \; | sed 's|^\./||' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "packages=${packages}" >> "$GITHUB_OUTPUT"
+
+  update:
+    needs: discover
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.manifest.outputs.updated }}
+    container:
+      image: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git devtools nvchecker openssh
+
+      - uses: actions/checkout@v7
+
+      - name: Mark git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run update pipeline (pkgctl version upgrade → makepkg)
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          if pkgctl version upgrade; then
+            :
+          else
+            status=$?
+            echo "::warning title=pkgctl version upgrade (${{ matrix.package }})::Command exited with code ${status}; continuing because no-update exit semantics are not verified."
+          fi
+          if git diff --quiet PKGBUILD; then
+            echo "PKGBUILD unchanged, skip .SRCINFO regeneration"
+          else
+            echo "PKGBUILD changed, regenerating .SRCINFO"
+            useradd -m build
+            chown -R build:build .
+            runuser -u build -- makepkg --printsrcinfo > .SRCINFO
+            chown -R root:root .
+          fi
+
+      - name: Generate manifest
+        id: manifest
+        run: |
+          if git diff --quiet "${{ matrix.package }}/"; then
+            echo '{"package":"${{ matrix.package }}","updated":false}' > "${{ matrix.package }}/manifest.json"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+          else
+            pkgver=$(grep '^pkgver=' ${{ matrix.package }}/PKGBUILD | cut -d= -f2)
+            echo "{\"package\":\"${{ matrix.package }}\",\"updated\":true,\"pkgver\":\"${pkgver}\"}" > "${{ matrix.package }}/manifest.json"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            echo "pkgver=${pkgver}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: status-${{ matrix.package }}
+          path: ${{ matrix.package }}/manifest.json
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v7
+        if: steps.manifest.outputs.updated == 'true'
+        with:
+          name: pkg-${{ matrix.package }}
+          path: |
+            ${{ matrix.package }}/PKGBUILD
+            ${{ matrix.package }}/.SRCINFO
+            ${{ matrix.package }}/manifest.json
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Setup SSH for AUR
+        if: steps.manifest.outputs.updated == 'true'
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+      - name: Push to AUR
+        if: steps.manifest.outputs.updated == 'true'
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+          git init
+          git config user.name "aur-bot"
+          git config user.email "aur-bot@users.noreply.github.com"
+          git remote add aur "ssh://aur@aur.archlinux.org/${{ matrix.package }}.git"
+          git add PKGBUILD .SRCINFO
+          TREE=$(git write-tree)
+          if git ls-remote --heads aur master | grep -q master; then
+            git fetch aur master
+            PARENT=$(git rev-parse FETCH_HEAD)
+            COMMIT=$(printf 'update to %s' "${{ steps.manifest.outputs.pkgver }}" | git commit-tree "$TREE" -p "$PARENT")
+          else
+            COMMIT=$(printf 'update to %s' "${{ steps.manifest.outputs.pkgver }}" | git commit-tree "$TREE")
+          fi
+          git push aur "$COMMIT:refs/heads/master"
+
+  aggregate:
+    needs: update
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - name: Download status artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: status-*
+          path: artifacts
+
+      - id: check
+        run: |
+          has_changes=false
+          while IFS= read -r -d '' manifest; do
+            if jq -e '.updated == true' "$manifest" > /dev/null; then
+              has_changes=true
+              break
+            fi
+          done < <(find artifacts -name manifest.json -print0)
+          echo "has_changes=${has_changes}" >> "$GITHUB_OUTPUT"
+
+  commit:
+    needs: [update, aggregate]
+    if: ${{ needs.aggregate.outputs.has_changes == 'true' }}
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git jq
+
+      - name: Configure Git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name "aur-bot"
+          git config --global user.email "aur-bot@users.noreply.github.com"
+
+      - uses: actions/checkout@v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pkg-*
+          path: artifacts
+
+      - name: Commit and push monorepo
+        run: |
+          set -euo pipefail
+          commit_lines=""
+          has_changes=false
+          changed_files=()
+
+          echo "::group::artifact directory structure"
+          find artifacts -type f || true
+          echo "::endgroup::"
+
+          while IFS= read -r -d '' manifest; do
+            pkg_subdir=$(dirname "$manifest")
+            pkg=$(jq -r '.package' "$manifest")
+            echo "Found manifest for $pkg: $(cat "$manifest")"
+
+            if jq -e '.updated' "$manifest" > /dev/null 2>&1; then
+              pkgver=$(jq -r '.pkgver' "$manifest")
+              cp "${pkg_subdir}/PKGBUILD" "${pkg}/PKGBUILD"
+              cp "${pkg_subdir}/.SRCINFO" "${pkg}/.SRCINFO"
+              changed_files+=("${pkg}/PKGBUILD" "${pkg}/.SRCINFO")
+              commit_lines="${commit_lines}chore(${pkg}): update to ${pkgver}"$'\n'
+              has_changes=true
+            else
+              echo "::warning ::manifest for $pkg has updated=false, skipping"
+            fi
+          done < <(find artifacts -name manifest.json -print0)
+
+          if ! $has_changes; then
+            echo "所有包均为最新版本，无变更。"
+            exit 0
+          fi
+
+          rm -rf artifacts
+          git add -- "${changed_files[@]}"
+          git commit -m "$(printf '%s\n\n%s' 'chore: update packages' "${commit_lines}")"
+          git push origin main

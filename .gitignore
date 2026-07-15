@@ -1,0 +1,8 @@
+.omo/
+
+# Arch 包构建产物
+pkg/
+src/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.zip

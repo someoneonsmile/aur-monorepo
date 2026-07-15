@@ -1,0 +1,8 @@
+# nvchecker 配置 - go2tv-bin
+# 检查上游 GitHub release，使用最新的 tag（去除 v 前缀）
+
+[go2tv-bin]
+source = "github"
+github = "alexballas/go2tv"
+use_max_tag = true
+prefix = "v"
