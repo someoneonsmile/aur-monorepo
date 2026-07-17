@@ -6,3 +6,9 @@ src/
 *.pkg.tar.zst
 *.pkg.tar.xz
 *.zip
+
+.env
+
+.ci/state/nvchecker-new.json
+.ci/state/nvchecker-combined.toml
+

@@ -51,9 +51,9 @@ jq -n \
   --arg pushed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{pkgver:$pkgver, pkgrel:$pkgrel, pushed_at:$pushed_at}' > "${STATE_FILE}"
 
-# 设置 AUR_DRY_RUN=1 时跳过实际推送，只验证到这里为止的构建逻辑（本地调试用）
-if [[ "${AUR_DRY_RUN:-0}" == "1" ]]; then
-  echo "[${PKG}] AUR_DRY_RUN=1，跳过推送 AUR"
+# 设置 DRY_RUN=1 时跳过实际推送，只验证到这里为止的构建逻辑（本地调试用）
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  echo "[${PKG}] DRY_RUN=1，跳过推送 AUR"
   jq -n --arg pkg "${PKG}" --arg pkgver "${new_pkgver}" \
     '{package:$pkg, updated:true, pkgver:$pkgver}' > "${STATUS_DIR}/${PKG}.json"
   exit 0

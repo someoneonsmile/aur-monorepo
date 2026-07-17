@@ -8,10 +8,15 @@
 #   6. 有失败就开/更新一个 GitHub issue 汇总
 #
 # 用法: sync-all.sh [指定单个包目录] [force: true/false]
+#
+# 环境变量 DRY_RUN=1：完整跑一遍检测/构建逻辑，但不产生任何外部副作用——
+#   不推 AUR、不 push 到 origin/main、不开/更新 GitHub issue。
+#   本地 commit 仍然会生成，方便你看 diff，但只停留在本地，不会被推走。
 set -euo pipefail
 
 FILTER_PKG="${1:-}"
 FORCE="${2:-false}"
+DRY_RUN="${DRY_RUN:-0}"
 
 REPO_ROOT="$(pwd)"
 STATE_DIR="${REPO_ROOT}/.ci/state"
@@ -66,7 +71,7 @@ if ! id build &>/dev/null; then
 fi
 
 # ---------- 3. 并发处理 ----------
-export STATUS_DIR FORCE FAILED_FILE REPO_ROOT
+export STATUS_DIR FORCE FAILED_FILE REPO_ROOT DRY_RUN
 printf '%s\n' "${to_process[@]}" | xargs -P 4 -I{} bash -c '
   pkg="{}"
   if ! "${REPO_ROOT}/scripts/update-package.sh" "$pkg" "$STATUS_DIR" "$FORCE"; then
@@ -129,12 +134,16 @@ if ${has_pkg_changes} || ${has_cache_changes}; then
     git commit -m "chore: refresh nvchecker cache" --quiet
   fi
 
-  git fetch origin main
-  if ! git rebase origin/main; then
-    echo "::error::rebase 到 origin/main 失败，需要人工介入（可能有冲突）"
-    exit 1
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "DRY_RUN=1，commit 已在本地生成，跳过 push 到 origin/main"
+  else
+    git fetch origin main
+    if ! git rebase origin/main; then
+      echo "::error::rebase 到 origin/main 失败，需要人工介入（可能有冲突）"
+      exit 1
+    fi
+    git push origin main
   fi
-  git push origin main
 else
   echo "没有包需要更新，也没有缓存需要刷新。"
 fi
