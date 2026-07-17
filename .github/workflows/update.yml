@@ -30,10 +30,6 @@ jobs:
     container:
       image: archlinux:latest
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # rebase 需要完整历史
-
       - name: Cache pacman packages
         uses: actions/cache@v4
         with:
@@ -46,6 +42,10 @@ jobs:
           set -euo pipefail
           pacman -Syu --noconfirm --needed \
             base-devel git devtools nvchecker openssh jq github-cli
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # rebase 需要完整历史
 
       - name: Setup SSH for AUR
         uses: webfactory/ssh-agent@v0.10.0
