@@ -83,6 +83,9 @@ printf '%s\n' "${to_process[@]}" | xargs -P 4 -I{} bash -c '
 mapfile -t failed_packages < "${FAILED_FILE}"
 
 # ---------- 4. 汇总本地 commit（串行，避免并发写 .git） ----------
+# 确保 CWD 是仓库根目录（xargs 子进程不会改变父进程 CWD，但以防万一）
+cd "${REPO_ROOT}"
+
 commit_lines=""
 has_pkg_changes=false
 
@@ -91,9 +94,9 @@ while IFS= read -r -d '' result; do
   updated=$(jq -r '.updated' "${result}")
   if [[ "${updated}" == "true" ]]; then
     pkgver=$(jq -r '.pkgver' "${result}")
-    git add "${pkg}/PKGBUILD" "${pkg}/.SRCINFO" ".ci/state/${pkg}.json"
-    if ! git diff --cached --quiet; then
-      git commit -m "chore(${pkg}): update to ${pkgver}" --quiet
+    git -C "${REPO_ROOT}" add "${pkg}/PKGBUILD" "${pkg}/.SRCINFO" ".ci/state/${pkg}.json"
+    if ! git -C "${REPO_ROOT}" diff --cached --quiet; then
+      git -C "${REPO_ROOT}" commit -m "chore(${pkg}): update to ${pkgver}" --quiet
       commit_lines="${commit_lines}chore(${pkg}): update to ${pkgver}"$'\n'
       has_pkg_changes=true
     fi
@@ -119,8 +122,8 @@ if [[ -f "${NEW_JSON}" && -f "${OLD_JSON}" ]]; then
       mv "${updated_old}.tmp" "${updated_old}"
     fi
   done
-  git add "${OLD_JSON}"
-  if ! git diff --cached --quiet -- "${OLD_JSON}"; then
+  git -C "${REPO_ROOT}" add "${OLD_JSON}"
+  if ! git -C "${REPO_ROOT}" diff --cached --quiet -- "${OLD_JSON}"; then
     has_cache_changes=true
   fi
 fi
@@ -130,19 +133,20 @@ if ${has_pkg_changes} || ${has_cache_changes}; then
   if ${has_pkg_changes}; then
     echo "本次更新："
     echo -n "${commit_lines}"
-  else
-    git commit -m "chore: refresh nvchecker cache" --quiet
+  fi
+  if ${has_cache_changes}; then
+    git -C "${REPO_ROOT}" commit -m "chore: refresh nvchecker cache" --quiet
   fi
 
   if [[ "${DRY_RUN}" == "1" ]]; then
     echo "DRY_RUN=1，commit 已在本地生成，跳过 push 到 origin/main"
   else
-    git fetch origin main
-    if ! git rebase origin/main; then
+    git -C "${REPO_ROOT}" fetch origin main
+    if ! git -C "${REPO_ROOT}" rebase origin/main; then
       echo "::error::rebase 到 origin/main 失败，需要人工介入（可能有冲突）"
       exit 1
     fi
-    git push origin main
+    git -C "${REPO_ROOT}" push origin main
   fi
 else
   echo "没有包需要更新，也没有缓存需要刷新。"
