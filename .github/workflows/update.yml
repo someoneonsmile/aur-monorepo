@@ -4,241 +4,57 @@ on:
   schedule:
     - cron: "0 */6 * * *" # 每6小时检查一次
   workflow_dispatch:
+    inputs:
+      package:
+        description: "只处理指定包（留空则处理全部）"
+        required: false
+        type: string
+      force:
+        description: "强制重新生成并推送，跳过 nvchecker 预检和版本比对"
+        required: false
+        type: boolean
+        default: false
 
-# 避免定时任务和手动触发同时运行，导致重复推送 AUR / 冲突提交 main
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
 
 jobs:
-  discover:
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      packages: ${{ steps.scan.outputs.packages }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Scan package directories
-        id: scan
-        run: |
-          set -euo pipefail
-          packages=$(find . -maxdepth 2 -name PKGBUILD -not -path './.git/*' \
-            -exec dirname {} \; | sed 's|^\./||' | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          echo "packages=${packages}" >> "$GITHUB_OUTPUT"
-
-  update:
-    needs: discover
-    if: ${{ needs.discover.outputs.packages != '[]' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     container:
       image: archlinux:latest
-    strategy:
-      fail-fast: false
-      max-parallel: 4 # 避免同时对 AUR 发起过多 SSH 连接
-      matrix:
-        package: ${{ fromJSON(needs.discover.outputs.packages) }}
-    env:
-      PKG: ${{ matrix.package }} # 避免直接在 run 中插值，规避潜在的 shell 注入
-
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # rebase 需要完整历史
+
+      - name: Cache pacman packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: pacman-${{ runner.os }}-
+
       - name: Install dependencies
         run: |
           set -euo pipefail
-          pacman -Syu --noconfirm --needed base-devel git devtools nvchecker openssh
-
-      - uses: actions/checkout@v7
-
-      - name: Mark git safe directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Run update pipeline (pkgctl version upgrade → makepkg)
-        working-directory: ${{ matrix.package }}
-        run: |
-          set -euo pipefail
-          if ! pkgctl version upgrade; then
-            status=$?
-            echo "::warning title=pkgctl version upgrade (${PKG})::Command exited with code ${status}; continuing because no-update exit semantics are not verified."
-          fi
-          if git diff --quiet PKGBUILD; then
-            echo "PKGBUILD unchanged, skip .SRCINFO regeneration"
-          else
-            echo "PKGBUILD changed, regenerating .SRCINFO"
-            useradd -m build
-            chown -R build:build .
-            runuser -u build -- makepkg --printsrcinfo > .SRCINFO
-            chown -R root:root .
-          fi
-
-      - name: Generate manifest
-        id: manifest
-        working-directory: ${{ matrix.package }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet .; then
-            echo '{"package":"'"${PKG}"'","updated":false}' > manifest.json
-            echo "updated=false" >> "$GITHUB_OUTPUT"
-          else
-            pkgver=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
-            echo '{"package":"'"${PKG}"'","updated":true,"pkgver":"'"${pkgver}"'"}' > manifest.json
-            echo "updated=true" >> "$GITHUB_OUTPUT"
-            echo "pkgver=${pkgver}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: status-${{ matrix.package }}
-          path: ${{ matrix.package }}/manifest.json
-          retention-days: 1
-
-      - uses: actions/upload-artifact@v7
-        if: steps.manifest.outputs.updated == 'true'
-        with:
-          name: pkg-${{ matrix.package }}
-          path: |
-            ${{ matrix.package }}/PKGBUILD
-            ${{ matrix.package }}/.SRCINFO
-            ${{ matrix.package }}/manifest.json
-          include-hidden-files: true
-          retention-days: 1
+          pacman -Syu --noconfirm --needed \
+            base-devel git devtools nvchecker openssh jq github-cli
 
       - name: Setup SSH for AUR
-        if: steps.manifest.outputs.updated == 'true'
         uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
-      - name: Push to AUR
-        if: steps.manifest.outputs.updated == 'true'
-        working-directory: ${{ matrix.package }}
+      - name: Sync packages
         env:
-          PKGVER: ${{ steps.manifest.outputs.pkgver }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
-          git init -q
-          git config user.name "aur-bot"
-          git config user.email "aur-bot@users.noreply.github.com"
-          git remote add aur "ssh://aur@aur.archlinux.org/${PKG}.git"
-          git add PKGBUILD .SRCINFO
-          TREE=$(git write-tree)
-          if git ls-remote --heads aur master | grep -q master; then
-            git fetch aur master
-            PARENT=$(git rev-parse FETCH_HEAD)
-            PARENT_TREE=$(git rev-parse FETCH_HEAD^{tree})
-            if [ "$TREE" = "$PARENT_TREE" ]; then
-              echo "树对象与 AUR HEAD 一致，跳过提交。"
-            else
-              COMMIT=$(printf 'update to %s' "$PKGVER" | git commit-tree "$TREE" -p "$PARENT")
-              git push aur "$COMMIT:refs/heads/master"
-            fi
-          else
-            COMMIT=$(printf 'update to %s' "$PKGVER" | git commit-tree "$TREE")
-            git push aur "$COMMIT:refs/heads/master"
-          fi
-
-  aggregate:
-    needs: update
-    if: always() && needs.update.result != 'skipped'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      has_changes: ${{ steps.check.outputs.has_changes }}
-    steps:
-      - name: Download status artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: status-*
-          path: artifacts
-
-      - id: check
-        run: |
-          set -euo pipefail
-          has_changes=false
-          while IFS= read -r -d '' manifest; do
-            if jq -e '.updated == true' "$manifest" > /dev/null; then
-              has_changes=true
-              break
-            fi
-          done < <(find artifacts -name manifest.json -print0)
-          echo "has_changes=${has_changes}" >> "$GITHUB_OUTPUT"
-
-  commit:
-    needs: [update, aggregate]
-    if: ${{ needs.aggregate.outputs.has_changes == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    container:
-      image: archlinux:latest
-
-    steps:
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          pacman -Syu --noconfirm --needed git jq
-
-      - name: Configure Git
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global user.name "aur-bot"
-          git config --global user.email "aur-bot@users.noreply.github.com"
-
-      - uses: actions/checkout@v7
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: pkg-*
-          path: artifacts
-
-      - name: Commit and push monorepo
-        run: |
-          set -euo pipefail
-          commit_lines=""
-          has_changes=false
-          changed_files=()
-
-          echo "::group::artifact directory structure"
-          find artifacts -type f || true
-          echo "::endgroup::"
-
-          while IFS= read -r -d '' manifest; do
-            pkg_subdir=$(dirname "$manifest")
-            pkg=$(jq -r '.package' "$manifest")
-            echo "Found manifest for $pkg: $(cat "$manifest")"
-
-            if jq -e '.updated == true' "$manifest" > /dev/null 2>&1; then
-              pkgver=$(jq -r '.pkgver' "$manifest")
-              cp "${pkg_subdir}/PKGBUILD" "${pkg}/PKGBUILD"
-              cp "${pkg_subdir}/.SRCINFO" "${pkg}/.SRCINFO"
-              changed_files+=("${pkg}/PKGBUILD" "${pkg}/.SRCINFO")
-              commit_lines="${commit_lines}chore(${pkg}): update to ${pkgver}"$'\n'
-              has_changes=true
-            else
-              echo "::warning ::manifest for $pkg has updated=false, skipping"
-            fi
-          done < <(find artifacts -name manifest.json -print0)
-
-          if ! $has_changes; then
-            echo "所有包均为最新版本，无变更。"
-            exit 0
-          fi
-
-          rm -rf artifacts
-          git add -- "${changed_files[@]}"
-          if git diff --cached --quiet; then
-            echo "暂存区与 HEAD 无差异，跳过提交。"
-            exit 0
-          fi
-          git commit -m "$(printf '%s\n\n%s' 'chore: update packages' "${commit_lines}")"
-
-          # 推送前先同步远端，降低并发写入冲突概率
-          git fetch origin main
-          git rebase origin/main || { echo "::error::rebase 失败，需要人工介入"; exit 1; }
-          git push origin main
+          chmod +x scripts/*.sh
+          ./scripts/sync-all.sh "${{ inputs.package }}" "${{ inputs.force }}"

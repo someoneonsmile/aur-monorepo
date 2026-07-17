@@ -20,6 +20,7 @@ aur/
 ## 包目录规范
 
 每个 AUR 包目录必须包含：
+
 - `PKGBUILD` — Arch Linux 包构建定义
 - `.SRCINFO` — 由 `makepkg --printsrcinfo` 生成
 - `.nvchecker.toml` — nvchecker 配置，定义上游版本检查源
@@ -40,6 +41,6 @@ aur/
 
 ## 依赖
 
-| Secret | 说明 |
-|---|---|
+| Secret                | 说明                       |
+| --------------------- | -------------------------- |
 | `AUR_SSH_PRIVATE_KEY` | 用于推送 AUR 包的 SSH 私钥 |
