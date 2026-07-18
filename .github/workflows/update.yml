@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/pacman/pkg
-          key: pacman-${{ runner.os }}-${{ github.run_id }}
+          key: pacman-${{ runner.os }}-${{ hashFiles('.github/workflows/update.yml') }}
           restore-keys: pacman-${{ runner.os }}-
 
       - name: Install dependencies
