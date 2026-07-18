@@ -116,9 +116,9 @@ if [[ -f "${NEW_JSON}" && -f "${OLD_JSON}" ]]; then
     if printf '%s\n' "${failed_packages[@]:-}" | grep -qxF "${pkg}"; then
       continue
     fi
-    if jq -e --arg p "${pkg}" 'has($p)' "${NEW_JSON}" >/dev/null 2>&1; then
-      new_val=$(jq -r --arg p "${pkg}" '.[$p]' "${NEW_JSON}")
-      jq --arg p "${pkg}" --arg v "${new_val}" '.[$p] = $v' "${updated_old}" > "${updated_old}.tmp"
+    if jq -e --arg p "${pkg}" '.data | has($p)' "${NEW_JSON}" >/dev/null 2>&1; then
+      new_val=$(jq -c --arg p "${pkg}" '.data[$p]' "${NEW_JSON}")
+      jq --arg p "${pkg}" --argjson v "${new_val}" '.version = 2 | .data[$p] = $v' "${updated_old}" > "${updated_old}.tmp"
       mv "${updated_old}.tmp" "${updated_old}"
     fi
   done

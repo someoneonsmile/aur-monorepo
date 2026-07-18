@@ -45,8 +45,8 @@ changed_packages=()
 if [[ ${#has_config_packages[@]} -gt 0 ]]; then
   if nvchecker -c "${COMBINED_TOML}" --logging warning; then
     for pkg in "${has_config_packages[@]}"; do
-      old_ver=$(jq -r --arg p "${pkg}" '.[$p] // empty' "${OLD_JSON}")
-      new_ver=$(jq -r --arg p "${pkg}" '.[$p] // empty' "${NEW_JSON}" 2>/dev/null || echo "")
+      old_ver=$(jq -r --arg p "${pkg}" '.data[$p].version // empty' "${OLD_JSON}")
+      new_ver=$(jq -r --arg p "${pkg}" '.data[$p].version // empty' "${NEW_JSON}" 2>/dev/null || echo "")
       if [[ -z "${new_ver}" || "${new_ver}" != "${old_ver}" ]]; then
         changed_packages+=("${pkg}")
       fi
