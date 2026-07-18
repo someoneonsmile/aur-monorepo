@@ -1,1 +1,10 @@
-{}
+{
+  "version": 2,
+  "data": {
+    "go2tv-bin": {
+      "version": "2.4.0",
+      "gitref": "refs/tags/v2.4.0",
+      "url": "https://github.com/alexballas/go2tv/releases/tag/v2.4.0"
+    }
+  }
+}
