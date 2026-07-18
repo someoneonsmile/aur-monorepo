@@ -63,6 +63,7 @@ fi
 # 这样多个包并发跑这一步也不会互相冲突。
 export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
 TMP_GIT="$(mktemp -d)"
+trap 'rm -rf "${TMP_GIT}"' EXIT
 git --git-dir="${TMP_GIT}" init -q
 git --git-dir="${TMP_GIT}" --work-tree=. add PKGBUILD .SRCINFO
 TREE=$(git --git-dir="${TMP_GIT}" write-tree)
@@ -85,7 +86,6 @@ else
     | git --git-dir="${TMP_GIT}" commit-tree "${TREE}")
   git --git-dir="${TMP_GIT}" push "${AUR_REMOTE}" "${COMMIT}:refs/heads/master"
 fi
-rm -rf "${TMP_GIT}"
 
 jq -n --arg pkg "${PKG}" --arg pkgver "${new_pkgver}" \
   '{package:$pkg, updated:true, pkgver:$pkgver}' > "${STATUS_DIR}/${PKG}.json"
