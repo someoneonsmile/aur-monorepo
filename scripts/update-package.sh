@@ -23,9 +23,11 @@ fi
 cd "${PKG}"
 
 # pkgctl version upgrade 会就地更新 PKGBUILD 的 pkgver/pkgrel/sha256sums
+# 退出码: 0=正常(已是最新或已升级), 非零=真正错误(网络/git/nvchecker 失败等)
 if ! pkgctl version upgrade; then
   status=$?
-  echo "::warning title=pkgctl version upgrade (${PKG})::退出码 ${status}，可能只是无更新，继续检查版本号"
+  echo "::error::pkgctl version upgrade (${PKG}) 失败，退出码 ${status}"
+  exit ${status}
 fi
 
 new_pkgver=$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
