@@ -2,7 +2,7 @@ name: update
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # 每6小时检查一次
+    - cron: "0 0 * * *" # 每天检查一次
   workflow_dispatch:
     inputs:
       package:
