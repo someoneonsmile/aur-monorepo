@@ -141,6 +141,8 @@ if ${has_pkg_changes} || ${has_cache_changes}; then
   if [[ "${DRY_RUN}" == "1" ]]; then
     echo "DRY_RUN=1，commit 已在本地生成，跳过 push 到 origin/main"
   else
+    # 清理可能残留的脏文件（如 pkgctl 失败后的部分修改未被正确还原时）
+    git -C "${REPO_ROOT}" checkout -- . 2>/dev/null || true
     git -C "${REPO_ROOT}" fetch origin main
     if ! git -C "${REPO_ROOT}" rebase origin/main; then
       echo "::error::rebase 到 origin/main 失败，需要人工介入（可能有冲突）"

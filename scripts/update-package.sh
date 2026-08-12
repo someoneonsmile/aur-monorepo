@@ -24,15 +24,33 @@ cd "${PKG}"
 
 # pkgctl version upgrade 会就地更新 PKGBUILD 的 pkgver/pkgrel/sha256sums
 # 退出码: 0=正常(已是最新或已升级), 非零=真正错误(网络/git/nvchecker 失败等)
-if ! pkgctl version upgrade; then
-  status=$?
+# 注意两个 CI 环境坑：
+# 1. set -e 下 pkgctl 返回非零会直接终止脚本，必须先 set +e 再捕获退出码
+# 2. pkgctl 的终端动画(spinner)依赖 tput；CI 容器无 TTY，TERM 未设置或为 dumb 时
+#    tput civis 失败会让 spinner 子进程死亡，收尾 kill 失败触发 pkgctl 内部 set -e，
+#    导致静默退出 1（devtools 1.5.x）。终端缺 civis 能力时补一个有的。
+if ! tput civis >/dev/null 2>&1; then
+  export TERM=xterm
+fi
+# pkgctl 更新校验和时内部会调 makepkg 下载源码，makepkg 拒绝以 root 运行，
+# 与 .SRCINFO 生成段一样切到 build 用户执行（build 用户由 sync-all.sh 提前创建）
+chown -R build:build .
+set +e
+runuser -u build -- pkgctl version upgrade
+status=$?
+set -e
+chown -R root:root .
+if [[ $status -ne 0 ]]; then
   echo "::error::pkgctl version upgrade (${PKG}) 失败，退出码 ${status}"
+  # pkgctl 可能部分修改了 PKGBUILD，需要还原以避免残留脏文件
+  git -C "${REPO_ROOT}" checkout -- "${PKG}/PKGBUILD" 2>/dev/null || true
   exit ${status}
 fi
 
 new_pkgver=$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)
 new_pkgrel=$(grep -m1 '^pkgrel=' PKGBUILD | cut -d= -f2)
 
+# 版本比对
 if [[ "${FORCE}" != "true" && "${new_pkgver}" == "${old_pkgver}" && "${new_pkgrel}" == "${old_pkgrel}" ]]; then
   echo "[${PKG}] 版本未变化 (${new_pkgver}-${new_pkgrel})，跳过"
   jq -n --arg pkg "${PKG}" '{package:$pkg, updated:false}' > "${STATUS_DIR}/${PKG}.json"
