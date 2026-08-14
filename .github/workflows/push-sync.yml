@@ -1,0 +1,54 @@
+name: push-sync
+
+# 手动修改 PKGBUILD 并 push 到 monorepo 时，自动把改动同步到 AUR。
+# 与 update.yml（schedule 上游版本检查）相互独立，互不影响。
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/PKGBUILD'
+      - '**/.SRCINFO'
+      - '**/.nvchecker.toml'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Cache pacman packages
+        uses: actions/cache@v6
+        with:
+          path: /var/cache/pacman/pkg
+          key: pacman-push-${{ runner.os }}-${{ hashFiles('.github/workflows/push-sync.yml') }}
+          restore-keys: pacman-push-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed \
+            base-devel git openssh jq pacman-contrib
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # git diff 需要完整历史
+
+      - name: Setup SSH for AUR
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+      - name: Sync pushed changes
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/sync-push.sh
