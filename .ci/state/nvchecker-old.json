@@ -2,10 +2,10 @@
   "version": 2,
   "data": {
     "go2tv-bin": {
-      "version": "2.6.0",
-      "gitref": "refs/tags/v2.6.0",
-      "url": "https://github.com/alexballas/go2tv/releases/tag/v2.6.0",
-      "creation_time": "2026-09-14T22:03:27Z"
+      "version": "2.6.1",
+      "gitref": "refs/tags/v2.6.1",
+      "url": "https://github.com/alexballas/go2tv/releases/tag/v2.6.1",
+      "creation_time": "2026-09-16T09:03:55Z"
     }
   }
 }
