@@ -24,18 +24,11 @@ AUR_REMOTE="ssh://aur@aur.archlinux.org/${PKG}.git"
 export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
 
 # 用 updpkgsums 重新计算所有 checksum（含分架构 sha256sums_<arch>）并写回 PKGBUILD。
-# 它会下载 source 到当前目录，结束后清理下载的文件，避免污染 git 工作区。
+# SRCDEST 已隔离到临时目录（见下），下载的源码不会落到仓库工作区里。
+# 注意不能只删「新增」文件来兜底：旧同名文件会被 makepkg 直接复用（它只认文件名，不比对
+# URL），算出来的校验和就是旧内容的哈希，所以必须在源头上隔离 SRCDEST。
 update_checksums() {
-  local before
-  before="$(mktemp)"
-  ls -1 > "${before}"
-  runuser -u build -- updpkgsums
-  # 删除 updpkgsums 新增的 source 文件（ls -1 不含隐藏文件，故 .SRCINFO/.nvchecker.toml 不受影响）
-  while IFS= read -r f; do
-    [[ -f "$f" ]] || continue
-    grep -qxF "$f" "${before}" || rm -f -- "$f"
-  done < <(ls -1)
-  rm -f "${before}"
+  runuser -u build -- env SRCDEST="${SRCDEST_DIR}" updpkgsums
   rm -rf src pkg
 }
 
@@ -46,8 +39,12 @@ chown -R build:build .
 local_srcinfo=$(runuser -u build -- makepkg --printsrcinfo 2>/dev/null)
 
 # 2. 从 AUR 获取已发布版本
+# SRCDEST 默认等于包目录(startdir)，会把上游源码下载进仓库工作区并污染 git 状态，
+# 隔离到临时目录（build 用户需要写权限），退出时和临时 git-dir 一起清理
+SRCDEST_DIR="$(mktemp -d)"
+chown build:build "${SRCDEST_DIR}"
 TMP_GIT="$(mktemp -d)"
-trap 'rm -rf "${TMP_GIT}"; chown -R root:root .' EXIT
+trap 'rm -rf "${TMP_GIT}" "${SRCDEST_DIR}"; chown -R root:root .' EXIT
 git --git-dir="${TMP_GIT}" init -q
 git --git-dir="${TMP_GIT}" --work-tree=. add PKGBUILD .SRCINFO
 

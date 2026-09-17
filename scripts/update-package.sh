@@ -22,6 +22,25 @@ fi
 
 cd "${PKG}"
 
+# 本次运行用到的临时目录统一登记，脚本退出时一次性清理
+# （pkgctl/makepkg 下载源码用的 SRCDEST、推送 AUR 用的临时 git-dir）
+TMP_DIRS=()
+cleanup_tmp_dirs() {
+  local d
+  for d in "${TMP_DIRS[@]:-}"; do
+    [[ -n "${d}" ]] && rm -rf "${d}"
+  done
+}
+trap cleanup_tmp_dirs EXIT
+
+# makepkg 的 SRCDEST 默认就是包目录(startdir)，不隔离的话 pkgctl 下载的上游源码会直接
+# 落在仓库工作区里；而 makepkg 只按文件名复用已下载的源码（不比对 URL），下一版会把上一版
+# 的旧文件当成新源码，导致重算出来的校验和是旧内容的哈希。这里隔离到临时目录。
+# makepkg 拒绝以 root 运行，目录需要交给 build 用户（build 用户由 sync-all.sh 提前创建）。
+SRCDEST_DIR="$(mktemp -d)"
+TMP_DIRS+=("${SRCDEST_DIR}")
+chown build:build "${SRCDEST_DIR}"
+
 # pkgctl version upgrade 会就地更新 PKGBUILD 的 pkgver/pkgrel/sha256sums
 # 退出码: 0=正常(已是最新或已升级), 非零=真正错误(网络/git/nvchecker 失败等)
 # 注意两个 CI 环境坑：
@@ -36,7 +55,7 @@ fi
 # 与 .SRCINFO 生成段一样切到 build 用户执行（build 用户由 sync-all.sh 提前创建）
 chown -R build:build .
 set +e
-runuser -u build -- pkgctl version upgrade
+runuser -u build -- env SRCDEST="${SRCDEST_DIR}" pkgctl version upgrade
 status=$?
 set -e
 chown -R root:root .
@@ -83,7 +102,7 @@ fi
 # 这样多个包并发跑这一步也不会互相冲突。
 export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
 TMP_GIT="$(mktemp -d)"
-trap 'rm -rf "${TMP_GIT}"' EXIT
+TMP_DIRS+=("${TMP_GIT}")
 git --git-dir="${TMP_GIT}" init -q
 git --git-dir="${TMP_GIT}" --work-tree=. add PKGBUILD .SRCINFO
 TREE=$(git --git-dir="${TMP_GIT}" write-tree)
