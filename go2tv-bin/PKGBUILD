@@ -23,10 +23,7 @@ _upstream_tag="v${pkgver}"
 
 # 架构无关的公共资源（从上游源码仓库获取）
 # 本地文件名必须带 ${pkgver}：makepkg 只按文件名识别并复用已下载的源码（不比对 URL），
-# 名字不带版本时，上一版留在 $startdir/$SRCDEST 里的旧文件会被当成新版本的源码：
-#   - 重新生成校验和时（pkgctl version upgrade / updpkgsums）算的是旧内容的哈希，写进 PKGBUILD；
-#   - 构建时 makepkg 直接 "Found" 旧文件，校验时报 "sha256sums ... FAILED"（校验不通过）。
-# 上游 assets/linux/app.go2tv.go2tv.appdata.xml 内含 <release version="...">，每次发版都会变。
+# 名字不带版本时，上一版留在 $startdir/$SRCDEST 里的旧文件会被当成新版本的源码
 source=(
   "LICENSE-${pkgver}::https://raw.githubusercontent.com/${_upstream_repo}/${_upstream_tag}/LICENSE"
   "go2tv-${pkgver}.desktop::https://raw.githubusercontent.com/${_upstream_repo}/${_upstream_tag}/assets/linux/app.go2tv.go2tv.desktop"
